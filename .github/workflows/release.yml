@@ -1,0 +1,151 @@
+# Builds and publishes split and universal APKs when a matching version tag is pushed:
+#   git tag v1.0.0 && git push origin v1.0.0
+#
+# The tag must match pubspec.yaml. Add KEYSTORE_BASE64, KEYSTORE_PASSWORD,
+# KEY_ALIAS, and KEY_PASSWORD under GitHub Settings → Secrets and variables → Actions.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag against pubspec.yaml
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version=$(sed -n 's/^version: *\([^+]*\).*/\1/p' pubspec.yaml)
+          if [ "$tag" != "$version" ]; then
+            echo "::error::Tag v$tag doesn't match pubspec.yaml's version $version"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Check manual release notes
+        run: |
+          set -euo pipefail
+          if [ ! -s RELEASE_NOTES.md ] || ! grep -q '[^[:space:]]' RELEASE_NOTES.md; then
+            echo "::error::Write this release's notes in RELEASE_NOTES.md before pushing the tag."
+            exit 1
+          fi
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+
+      - name: Validate bundled scanner CIDRs
+        working-directory: scanner
+        run: go run ./cmd/normalize_scanner_cidrs --check ../assets/scanner
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: 3.47.7
+          channel: stable
+          cache: true
+
+      - name: Psiphon exit (built from source with the NDK)
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
+        run: bash scripts/build_psiphon.sh
+
+      - name: Tor and lyrebird (Tor Project's expert bundles, hash-checked)
+        run: bash scripts/fetch_tor.sh
+
+      - name: Xray core (built from xray/ with gomobile and the NDK)
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
+        run: bash scripts/build_xray.sh
+
+      - name: Free Go build cache before APK packaging
+        run: |
+          go clean -cache -modcache
+          df -h /
+
+      - name: Routing data (Chocolate4U/Iran-v2ray-rules, latest)
+        run: bash scripts/fetch_geo.sh
+
+      - name: Minify worker
+        working-directory: worker
+        run: |
+          npm install --no-package-lock --no-audit --no-fund
+          npm run minify
+
+      - name: Tor bridges for the setup wizard (fresh each build)
+        run: bash scripts/fetch_tor_bridges.sh
+
+      - run: flutter pub get --enforce-lockfile
+
+      - run: flutter test --no-pub
+
+      - name: Sign release APKs
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PASSWORD" ] || [ -z "$KEY_ALIAS" ] || [ -z "$KEY_PASSWORD" ]; then
+            echo "::error::Release signing secrets are missing. Add KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS, and KEY_PASSWORD in GitHub Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+
+          mkdir -p android/keystore
+          cleanup() {
+            rm -f android/key.properties android/keystore/release.jks
+          }
+          trap cleanup EXIT
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > android/keystore/release.jks
+          keytool -list -keystore android/keystore/release.jks \
+            -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" >/dev/null
+          {
+            printf 'storeFile=../keystore/release.jks\n'
+            printf 'storePassword=%s\n' "$KEYSTORE_PASSWORD"
+            printf 'keyAlias=%s\n' "$KEY_ALIAS"
+            printf 'keyPassword=%s\n' "$KEY_PASSWORD"
+          } > android/key.properties
+          mkdir -p dist
+          flutter build apk --release --split-per-abi --no-pub
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            apk="build/app/outputs/flutter-apk/app-$abi-release.apk"
+            if [ ! -s "$apk" ]; then
+              echo "::error::Expected APK was not created: $apk"
+              exit 1
+            fi
+            cp "$apk" "dist/bpb-$VERSION-$abi.apk"
+          done
+
+          flutter build apk --release --no-pub
+          apk="build/app/outputs/flutter-apk/app-release.apk"
+          if [ ! -s "$apk" ]; then
+            echo "::error::Expected universal APK was not created: $apk"
+            exit 1
+          fi
+          cp "$apk" "dist/bpb-$VERSION-universal.apk"
+
+      - name: Generate APK SHA-256 checksums
+        run: sha256sum dist/bpb-*.apk > dist/SHA256SUMS
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: BPB ${{ env.VERSION }}
+          body_path: RELEASE_NOTES.md
+          files: |
+            dist/*.apk
+            dist/SHA256SUMS
