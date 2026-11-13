@@ -20,9 +20,9 @@ VOIDCORE aims to provide a simple and modern VPN experience with advanced connec
 
 # 📱 Platform Support
 
-### Android | ✅ Supported
-### Windows | ❌ Not Available
-### iOS | ❌ Not Available
+Android | ✅ Supported
+Windows | ❌ Not Available
+iOS | ❌ Not Available
 
 # ⚙️ Installation
 
