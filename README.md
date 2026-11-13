@@ -20,10 +20,9 @@ VOIDCORE aims to provide a simple and modern VPN experience with advanced connec
 
 # 📱 Platform Support
 
-Platform| Availability
-Android| ✅ Supported
-Windows| ❌ Not Available
-iOS| ❌ Not Available
+### Android | ✅ Supported
+### Windows | ❌ Not Available
+### iOS | ❌ Not Available
 
 # ⚙️ Installation
 
@@ -50,7 +49,7 @@ Always use trusted configurations and keep your credentials and API tokens priva
 
 Stay connected with the latest news, releases, and announcements.
 
-Telegram: "@voidcorevpn" (https://t.me/voidcorevpn)
+Telegram: [@voidcorevpn](https://t.me/voidcorevpn)
 
 # 📋 Disclaimer
 
@@ -59,5 +58,3 @@ VOIDCORE is provided as-is. Connection availability and performance may vary dep
 # 📄 License
 
 See the "LICENSE" (LICENSE) file for licensing information.
-
-</p>
